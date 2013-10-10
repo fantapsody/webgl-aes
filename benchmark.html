@@ -1,0 +1,358 @@
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="content-type" content=
+	  "text/html;charset=utf8" />
+    <title>
+      Benchmark
+    </title>
+    <script type="text/javascript" src="lib/jquery.min.js">
+    </script>
+    <script type="text/javascript" src=
+	    "3rdparty/jquery.dataTables.min.js">
+	    </script>
+	    <script type="text/javascript" src="lib/util.js">
+	    </script>
+	    <script type="text/javascript" src="3rdparty/sjcl.js">
+	    </script>
+	    <script type="text/javascript" src="lib/glengine.js">
+	    </script>
+	    <script type="text/javascript" src="lib/aes.js">
+	    </script>
+	    <script type="text/javascript">
+	      //<![CDATA[
+              // the count of the fixed point
+              var c_fp = 2;
+              // the size of the first block
+              var sz_blk0 = 16;
+              // the stride of multiples increase
+              var stride = 4;
+              // at what size will the benchmark stop
+              var sz_blk_max = 1048576;
+              // the number of times each group of tests runs
+              var n = 3;
+	      var iv = 0x12345678;
+	      var gctr;
+
+              var glaes = null;
+              var sjclaes = null;
+
+              function clear(){
+                  document.getElementById("info").innerHTML = "";
+                  document.getElementById("err").innerHTML = "";
+              }
+              function showMsg(msg){
+                  document.getElementById("info").innerHTML += msg + "<br/>";
+              }
+
+              function showErr(msg){
+                  document.getElementById("err").innerHTML += msg + "<br/>";
+              }
+
+              function init(){
+                  try{
+		      var ts = new Date();
+                      glaes = new GLAES();
+		      var te = new Date();
+		      var config = "GLAES initialization: " + (te - ts) + "ms<br/>";
+		      config += window.navigator.userAgent;
+		      $("#configuration").html(config);
+                  } catch(e){
+                      showErr(e);
+                      $("#btn_glaes").prop("disabled", true);
+                  }
+              }
+
+              function addResult(node){
+                  var nRslt = document.getElementById("result");
+                  if(!nRslt.hasChildNodes())
+                      nRslt.appendChild(node);
+                  else
+                      nRslt.insertBefore(node, nRslt.firstChild);
+              }
+
+
+              function initTable(title){
+                  var table = document.createElement("table");
+                  var p = document.createElement("p");
+                  var h = document.createElement("h3");
+                  h.innerHTML = title;
+                  p.appendChild(h);
+                  p.appendChild(table);
+                  p.appendChild(document.createElement("hr"));
+                  // insert the table as the first child of the node "#result"
+                  addResult(p);
+
+                  var html = "<thead>" +
+                      "<th>Block Size(B)<\/th>" +
+                      "<th>Time(ms)<\/th>" +
+                      "<th>Throughput(KB/s)<\/th>" +
+                      "<\/thead>";
+                  table = $(table);
+                  table.html(html);
+                  return table.dataTable({
+                      "bPaginate" : false,
+                      "bSearch" : false,
+                      "bFilter" : false,
+                      "bInfo" : false
+                  });
+              }
+
+              function initVars(){
+                  var sz = $("#t_sz_blk").val();
+                  var cnt = $("#t_times").val();
+                  try{
+                      sz = parseInt(sz);
+                      sz_blk_max = sz;
+		      gctr = generateCTRSeq(iv, sz_blk_max);
+
+                      cnt = parseInt(cnt);
+                      n = cnt;
+                      return true;
+                  } catch(e){
+                      showErr(e);
+                      return false;
+                  }
+              }
+
+              function runGLAES(btn){
+                  $("button").prop("disabled", true);
+                  showMsg("Benchmark started!");
+
+                  benchmark("GLAES",
+                            function(key){
+                                glaes.setKey(key);
+                            },
+                            function(pt, ct, ctr){
+				var rslt = glaes.encrypt_ecb(pt, ct);
+                                // var rslt = glaes.encrypt_ctr(pt, ct, 0, ctr);
+                                return rslt;
+                            }
+                           );
+
+                  $("button").prop("disabled", false);
+                  showMsg("Benchmark completed!");
+              }
+
+              function runSJCL(btn){
+                  $("button").prop("disabled", true);
+                  showMsg("Benchmark started!");
+
+                  benchmark("SJCL-AES",
+                            function(key){
+                                sjclaes = new sjcl.cipher.aes(bytesToWords(key));
+                            },
+                            function(pt, ct, ctr){
+                                var sjclpt = bytesToWords(pt);
+                                if(!ct)
+                                    ct = new Uint8Array(pt.length);
+				// sjclEncryptCTR(sjclaes, pt, ctr, ct);
+                                for(var i = 0; i < sjclpt.length; i += 4){
+                                    ct.set(wordsToBytes(sjclaes.encrypt(sjclpt.slice(i, i + 4))), i * 4);
+                                }
+                            }
+                           );
+
+                  $("button").prop("disabled", false);
+                  showMsg("Benchmark completed!");
+              }
+
+              function benchmark(title, setkey, encrypt){
+                  // initialize variables
+                  clear();
+                  if(!initVars())
+                      return;
+
+                  // initialize the datatable
+                  var table = initTable(title);
+
+                  var randomtext = new Uint8Array(sz_blk_max);
+                  var ciphertext = new Uint8Array(sz_blk_max);
+                  var key = new Array(16);
+
+                  // generate random values for the plaintext
+                  for(var i = 0; i < randomtext.length; i++)
+                      randomtext[i] = parseInt(Math.floor(Math.random() * 256));
+
+                  // generate values for the key
+                  // the size of the key is 16 bytes
+                  for(var i = 0; i < key.length; i++)
+                      key[i] = i * 0x11;
+
+                  // glaes.setKey(key);
+                  setkey(key);
+                  // for comparison
+                  var s_aes = new sjcl.cipher.aes(bytesToWords(key));
+                  var sjclct = new Uint8Array(randomtext.length);
+		  // sjclEncryptCTR(s_aes, randomtext, gctr, sjclct);
+                  var sjclpt = bytesToWords(randomtext);
+                  for(var i = 0; i < sjclpt.length; i += 4){
+                      sjclct.set(wordsToBytes(s_aes.encrypt(sjclpt.slice(i, i + 4))), i * 4);
+                  }
+
+
+                  // cold boot the engine
+                  // glaes.encrypt(randomtext.subarray(0, 16));
+
+                  for(var sz = sz_blk0; sz <= sz_blk_max; sz = sz * stride){
+                      showMsg("Testing for block size " + sz);
+                      var pt = randomtext.subarray(0, sz);
+                      var ct = ciphertext.subarray(0, sz);
+
+                      var ts = new Date();
+                      for(var i = 0; i < n; i++){
+                          encrypt(pt, ct, gctr.subarray(0, pt.length));
+                      }
+                      var te = new Date();
+
+                      var time = te - ts;
+
+                      // check if the encryption result is correct
+                      var isCorrect = true;
+                      for(var j = 0; j < sz; j++){
+                          if(ct[j] != sjclct[j]){
+                              isCorrect = false;
+                              break;
+                          }
+                      }
+                      if(!isCorrect){
+                          showErr("The result is not correct for block size " + sz + " !");
+//                          return;
+                      }
+
+                      // output the result
+                      var throughput = (sz * n / time).toFixed(c_fp);
+                      var t = new Array(sz, time, throughput);
+                      table.fnAddData(t);
+                  }
+              }
+
+              // for benchmark 2
+              var sz_pt;
+              var sz_framebuffer;
+
+              function runGLAES2(btn){
+                  $("button").prop("disabled", true);
+                  showMsg("Benchmark started!");
+
+                  benchmark2("GLAES",
+                             function(key){
+                                 glaes.setKey(key);
+                             },
+                             function(pt, ct, ctr){
+				 glaes.encrypt_ecb(pt, ct);//, 0, ctr);
+                             }
+                            );
+
+                  $("button").prop("disabled", false);
+                  showMsg("Benchmark completed!");
+              }
+
+              function initVars2(){
+                  try{
+                      sz_pt = parseInt($("#t_sz_pt").val());
+                      sz_framebuffer = parseInt($("#t_sz_framebuffer").val());
+		      // gctr = generateCTRSeq(iv, sz_pt);
+                      return true;
+                  } catch(e) {
+                      return false;
+                  }
+              }
+
+              function benchmark2(title, setkey, encrypt){
+                  if(!initVars2())
+                      return;
+                  var randomtext = new Uint8Array(sz_pt);
+                  var ciphertext = new Uint8Array(sz_pt);
+                  var sjclct = new Uint8Array(sz_pt);
+                  var key = new Array(16);
+
+                  // generate random values for the plaintext
+                  for(var i = 0; i < randomtext.length; i++)
+                      randomtext[i] = parseInt(Math.floor(Math.random() * 256));
+
+                  // generate values for the key
+                  // the size of the key is 16 bytes
+                  for(var i = 0; i < key.length; i++)
+                      key[i] = i * 0x11;
+
+                  // glaes.setKey(key);
+                  setkey(key);
+                  sjclaes = new sjcl.cipher.aes(bytesToWords(key));
+
+                  var ts = new Date();
+                  for(var i = 0; i < randomtext.length; i += sz_framebuffer){
+		      encrypt(randomtext.subarray(i, i + sz_framebuffer), ciphertext.subarray(i, i + sz_framebuffer));
+                  }
+                  var te = new Date();
+
+                  var sjclpt = bytesToWords(randomtext);
+                  for(var i = 0; i < sjclpt.length; i += 4){
+                      sjclct.set(wordsToBytes(sjclaes.encrypt(sjclpt.slice(i, i + 4))), i * 4);
+                  }
+
+                  // compare the result
+                  for(var i = 0; i < randomtext.length; i++){
+                      if(sjclct[i] != ciphertext[i]){
+                          showErr("The result is incorrect!");
+                          break;
+                      }
+                  }
+
+                  // output the result
+                  var p = document.createElement("p");
+                  var h3 = document.createElement("h3");
+                  h3.innerHTML = title;
+                  p.appendChild(h3);
+                  addResult(p);
+
+                  var p1 = document.createElement("p");
+                  p.appendChild(p1);
+                  p1.innerHTML = "Encrypted " + sz_pt  + " bytes with framebuffer size " + sz_framebuffer + " in " + (te - ts) +  "ms, throughput is " + (sz_pt / (te - ts)).toFixed(c_fp) + "KB/s";
+
+                  p.appendChild(document.createElement("hr"));
+              }
+
+	      //]]>
+	    </script>
+</head>
+<body onload="init()">
+  <div>
+    <div id="configuration" style="font-weight:bold; color:green;"></div>
+    <div id="err" style='font-weight: bold;color: red;'></div>
+    <div id="info" style='font-weight: bold;color: blue;'></div>
+    <div>
+      <h3>
+        Timing the encryption of given size of plaintext for
+        given times
+      </h3>
+      <p>
+        Plantext Size: <input id="t_sz_blk" type="text" value=
+        "1048576" /> Count: <input id="t_times" type="text"
+        value="3" />
+      </p>
+      <p>
+        <button onclick='runSJCL(this)'>Run SJCL-AES</button>
+        <button id='btn_glaes' onclick='runGLAES(this)'>Run
+        GLAES</button>
+      </p>
+      <hr />
+    </div>
+    <div>
+      <h3>
+        Timing the encryption of given size of plaintext for
+        different framebuffer size
+      </h3>
+      <p>
+        Plantext Size: <input id="t_sz_pt" type="text" value=
+        "1048576" /> Framebuffer Size: <input id=
+        "t_sz_framebuffer" type="text" value="65536" />
+      </p>
+      <p>
+        <button onclick="runGLAES2(this)">Run</button>
+      </p>
+      <hr />
+    </div>
+    <div id="result"></div>
+  </div>
+</body>
+</html>
